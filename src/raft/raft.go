@@ -18,8 +18,11 @@ package raft
 //
 
 import (
+	"bytes"
+	"encoding/gob"
 	"labrpc"
 	"sync"
+	"time"
 )
 
 // import "bytes"
@@ -35,6 +38,24 @@ type ApplyMsg struct {
 	Snapshot    []byte // ignore for lab2; only used in lab3
 }
 
+type LogEntry struct {
+	Term    int
+	Command interface{}
+}
+
+// 枚举状态
+const (
+	Follower  = 0
+	Candidate = 1
+	Leader    = 2
+)
+
+// 参数常量
+const (
+	HEARTBEAT_TIMEOUT = 100
+	ELECTION_TIMEOUT  = 300
+)
+
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu        sync.Mutex
@@ -46,6 +67,23 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// Persistent state on all servers
+	CurrentTerm int
+	VotedFor    int
+	Logs        []LogEntry
+
+	// Volatile state on all servers
+	CommitIndex int
+	LastApplied int
+
+	// Volatile state on leaders
+	NextIndex  []int
+	MatchIndex []int
+
+	state          int
+	applyChannel   chan ApplyMsg
+	electionTimer  *time.Timer
+	heartbeatTimer *time.Timer
 }
 
 // return currentTerm and whether this server
@@ -55,6 +93,8 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here.
+	term = rf.CurrentTerm
+	isleader = rf.state == Leader
 	return term, isleader
 }
 
@@ -64,22 +104,24 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here.
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := gob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := gob.NewEncoder(w)
+	e.Encode(rf.CurrentTerm)
+	e.Encode(rf.VotedFor)
+	e.Encode(rf.Logs)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
 	// Your code here.
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := gob.NewDecoder(r)
-	// d.Decode(&rf.xxx)
-	// d.Decode(&rf.yyy)
+	r := bytes.NewBuffer(data)
+	d := gob.NewDecoder(r)
+	d.Decode(&rf.CurrentTerm)
+	d.Decode(&rf.VotedFor)
+	d.Decode(&rf.Logs)
 }
 
 // example RequestVote RPC arguments structure.
