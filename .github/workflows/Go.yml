@@ -23,3 +23,6 @@ jobs:
 
     - name: Test ELection
       run: cd src/raft && go test -run Election
+
+    - name: Test FailNoAgree
+      run: cd src/raft && go test -run FailNoAgree
