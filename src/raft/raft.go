@@ -150,6 +150,31 @@ type RequestVoteReply struct {
 	VoteGranted bool
 }
 
+type AppendEntriesArgs struct {
+	// Arguments:
+	// 	term leader’s term
+	// 	leaderId so follower can redirect clients
+	// 	prevLogIndex index of log entry immediately preceding new ones
+	// 	prevLogTerm term of prevLogIndex entry
+	// 	entries[] log entries to store (empty for heartbeat; may send more than one for efficiency)
+	// 	leaderCommit leader’s commitIndex
+	Term         int
+	LeaderId     int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []LogEntry
+	LeaderCommit int
+}
+
+type AppendEntriesReply struct {
+	// Results:
+	// 	term currentTerm, for leader to update itself
+	// 	success true if follower contained entry matching
+	// 	prevLogIndex and prevLogTerm
+	Term    int
+	Success bool
+}
+
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here.
