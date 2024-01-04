@@ -20,7 +20,9 @@ package raft
 import (
 	"bytes"
 	"encoding/gob"
+	"fmt"
 	"labrpc"
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -200,6 +202,30 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 }
 
+// be Follower
+func (rf *Raft) beFollower(newTerm int, resetElectionTimer bool) {
+	rf.state = Follower
+	rf.CurrentTerm = newTerm
+	rf.persist()
+	if resetElectionTimer {
+		if !rf.electionTimer.Stop() {
+			<-rf.electionTimer.C
+		}
+		// ELECTION_TIMEOUT + rand
+		nextTimeout := ELECTION_TIMEOUT + rand.Intn(ELECTION_TIMEOUT/4)
+		rf.electionTimer.Reset(time.Duration(nextTimeout) * time.Millisecond)
+	}
+	fmt.Println("beFollower", rf.me, newTerm)
+}
+
+// be Leader
+func (rf *Raft) beLeader() {
+}
+
+// be Candidate
+func (rf *Raft) beCandidate() {
+}
+
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
 // server's port is peers[me]. all the servers' peers[] arrays
@@ -217,9 +243,27 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here.
+	rf.CurrentTerm = 0
+	rf.VotedFor = -1
+	rf.Logs = []LogEntry{{0, nil}} // Logs first index is 1
+	rf.CommitIndex = 0
+	rf.LastApplied = 0
+	rf.NextIndex = make([]int, len(peers))
+	rf.MatchIndex = make([]int, len(peers))
+	rf.applyChannel = applyCh
+	rf.electionTimer = time.NewTimer(ELECTION_TIMEOUT * time.Millisecond)
+	rf.beFollower(0, true)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+	go rf.tryElection()
 	return rf
+}
+
+func (rf *Raft) tryElection() {
+	// wait for rf.electionTimer
+	for {
+		<-rf.electionTimer.C
+	}
 }
