@@ -215,7 +215,7 @@ func (rf *Raft) beFollower(newTerm int, resetElectionTimer bool) {
 		nextTimeout := ELECTION_TIMEOUT + rand.Intn(ELECTION_TIMEOUT/4)
 		rf.electionTimer.Reset(time.Duration(nextTimeout) * time.Millisecond)
 	}
-	fmt.Println("beFollower", rf.me, newTerm)
+	fmt.Println(rf.me, "become follower at", newTerm)
 }
 
 // be Leader
