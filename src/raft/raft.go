@@ -20,7 +20,6 @@ package raft
 import (
 	"bytes"
 	"encoding/gob"
-	"fmt"
 	"labrpc"
 	"math/rand"
 	"sync"
@@ -189,8 +188,25 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		rf.VotedFor = args.CandidateId
 		reply.VoteGranted = true
 		reply.Term = args.Term
-		fmt.Println(rf.me, "vote for", args.CandidateId)
+		// fmt.PrintLn(rf.me, "vote for", args.CandidateId)
 	}
+}
+
+func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
+	if args.Term < rf.CurrentTerm {
+		reply.Success = false
+		reply.Term = rf.CurrentTerm
+		// fmt.PrintLn(rf.me, "reject append entries from", args.LeaderId)
+		return
+	}
+	// TODO 校验leader的日志
+
+	// 维护日志
+
+	rf.beFollower(args.Term, true)
+	reply.Success = true
+	reply.Term = args.Term
+	// fmt.PrintLn(rf.me, "receive append entries from", args.LeaderId)
 }
 
 func aUpToData(aTerm, aIndex, bTerm, bIndex int) bool {
@@ -255,24 +271,28 @@ func (rf *Raft) beFollower(newTerm int, resetElectionTimer bool) {
 	rf.VotedFor = -1
 	rf.persist()
 	if resetElectionTimer {
-		rf.resetElectionTimer()
+		rf.resetElectionTimer(MIN_ELECTION_TIMEOUT, MAX_ELECTION_TIMEOUT)
 	}
-	fmt.Println(rf.me, "become follower at", newTerm)
+	// fmt.PrintLn(rf.me, "become follower at", newTerm)
 	rf.mu.Unlock()
 }
 
-func (rf *Raft) resetElectionTimer() {
-	if !rf.electionTimer.Stop() {
-		<-rf.electionTimer.C
-	}
-	nextTimeout := MIN_ELECTION_TIMEOUT + rand.Intn(MAX_ELECTION_TIMEOUT-MIN_ELECTION_TIMEOUT)
-	fmt.Println(rf.me, "reset election timer to", nextTimeout)
+func (rf *Raft) resetElectionTimer(min, max int) {
+	// if !rf.electionTimer.Stop() {
+	// 	<-rf.electionTimer.C
+	// }
+	nextTimeout := min + rand.Intn(max-min)
+	// fmt.PrintLn(rf.me, "reset election timer to", nextTimeout)
 	rf.electionTimer.Reset(time.Duration(nextTimeout) * time.Millisecond)
 }
 
 // be Leader
 func (rf *Raft) beLeader() {
 	rf.mu.Lock()
+	// fmt.PrintLn(rf.me, "become leader at", rf.CurrentTerm)
+	rf.state = Leader
+	rf.VotedFor = -1
+	rf.persist()
 	for i := range rf.peers {
 		if i == rf.me {
 			continue
@@ -290,7 +310,7 @@ func (rf *Raft) beCandidate() {
 	rf.VotedFor = rf.me
 	rf.state = Candidate
 	rf.persist()
-	fmt.Println(rf.me, "become candidate at", rf.CurrentTerm)
+	// fmt.PrintLn(rf.me, "become candidate at", rf.CurrentTerm)
 	rf.mu.Unlock()
 }
 
@@ -333,10 +353,11 @@ func (rf *Raft) tryElection() {
 	// wait for rf.electionTimer
 	for {
 		<-rf.electionTimer.C
-		fmt.Println(rf.me, "try to become candidate")
+		// fmt.PrintLn(rf.me, "try to become candidate")
 		if rf.state == Leader {
-			// Leader -> Leader
-			rf.resetElectionTimer()
+			// Leader -> Leader, heart beating
+			// fmt.PrintLn(rf.me, "already leader, heart beat")
+			rf.heartBeat()
 			continue
 		}
 		if rf.state == Follower {
@@ -362,9 +383,9 @@ func (rf *Raft) tryElection() {
 				reply := RequestVoteReply{}
 
 				go func(dst int) {
-					fmt.Println(rf.me, "send request vote to", dst)
+					// fmt.PrintLn(rf.me, "send request vote to", dst)
 					if rf.sendRequestVote(dst, args, &reply) {
-						fmt.Println(rf.me, "receive request vote reply from", dst, "term", reply.Term, "vote granted", reply.VoteGranted)
+						// fmt.PrintLn(rf.me, "receive request vote reply from", dst, "term", reply.Term, "vote granted", reply.VoteGranted)
 						if reply.Term == rf.CurrentTerm {
 							// 防止收到过期的投票
 							voteResult <- reply.VoteGranted
@@ -373,7 +394,7 @@ func (rf *Raft) tryElection() {
 							voteResult <- false
 						}
 					} else {
-						fmt.Println(rf.me, "send request vote to", dst, "failed")
+						// fmt.PrintLn(rf.me, "send request vote to", dst, "failed")
 						// TODO
 						voteResult <- false
 					}
@@ -382,37 +403,38 @@ func (rf *Raft) tryElection() {
 
 			time.Sleep(100 * time.Millisecond)
 			if rf.state == Candidate {
-				fmt.Println(rf.me, "still candidate, counting votes")
+				// fmt.PrintLn(rf.me, "still candidate, counting votes")
 				for range rf.peers {
 					select {
 					case voteGranted := <-voteResult:
 						if voteGranted {
 							voteCount++
-							fmt.Println(rf.me, "vote count", voteCount)
+							// fmt.PrintLn(rf.me, "vote count", voteCount)
 						}
 					default:
-						fmt.Println(rf.me, "failed to collect vote from some peers, try another round later")
+						// fmt.PrintLn(rf.me, "failed to collect vote from some peers, try another round later")
 					}
 				}
 				if voteCount > len(rf.peers)/2 {
 					// become leader
-					fmt.Println(rf.me, "should become leader")
+					// fmt.PrintLn(rf.me, "should become leader")
 					rf.beLeader()
-					break
+					rf.heartBeat()
 				} else {
 					// election failed
-					fmt.Println(rf.me, "election failed, try another round later")
-					rf.resetElectionTimer()
+					// fmt.PrintLn(rf.me, "election failed, try another round later")
+					rf.resetElectionTimer(MIN_ELECTION_TIMEOUT, MAX_ELECTION_TIMEOUT)
 					continue
 				}
 
 			}
 		}
 		if rf.state == Candidate {
-			// Follower -> Candidate
+			// Candidate -> Candidate
 			rf.beCandidate()
-			voteResult := make(chan bool)
-			voteCount := 1
+			voteResult := make(chan bool, len(rf.peers))
+			voteCount := 0
+			voteResult <- true // self vote
 			for i := range rf.peers {
 				if i == rf.me {
 					// don't send request vote to self
@@ -430,44 +452,79 @@ func (rf *Raft) tryElection() {
 				reply := RequestVoteReply{}
 
 				go func(dst int) {
-					fmt.Println(rf.me, "send request vote to", dst)
+					// fmt.PrintLn(rf.me, "send request vote to", dst)
 					if rf.sendRequestVote(dst, args, &reply) {
-						fmt.Println(rf.me, "receive request vote reply from", dst, "term", reply.Term, "vote granted", reply.VoteGranted)
+						// fmt.PrintLn(rf.me, "receive request vote reply from", dst, "term", reply.Term, "vote granted", reply.VoteGranted)
 						if reply.Term == rf.CurrentTerm {
 							// 防止收到过期的投票
 							voteResult <- reply.VoteGranted
-							if reply.VoteGranted {
-								voteCount++
-								fmt.Println(rf.me, "vote count", voteCount)
-							}
 						} else if reply.Term > rf.CurrentTerm {
 							rf.beFollower(reply.Term, true)
 							voteResult <- false
 						}
 					} else {
-						fmt.Println(rf.me, "send request vote to", dst, "failed")
+						// fmt.PrintLn(rf.me, "send request vote to", dst, "failed")
 						// TODO
 						voteResult <- false
 					}
 				}(i)
 			}
 
+			time.Sleep(100 * time.Millisecond)
 			if rf.state == Candidate {
-				fmt.Println(rf.me, "still candidate, counting votes")
+				// fmt.PrintLn(rf.me, "still candidate, counting votes")
+				for range rf.peers {
+					select {
+					case voteGranted := <-voteResult:
+						if voteGranted {
+							voteCount++
+							// fmt.PrintLn(rf.me, "vote count", voteCount)
+						}
+					default:
+						// fmt.PrintLn(rf.me, "failed to collect vote from some peers, try another round later")
+					}
+				}
 				if voteCount > len(rf.peers)/2 {
 					// become leader
+					// fmt.PrintLn(rf.me, "should become leader")
 					rf.beLeader()
-					break
+					rf.heartBeat()
+					continue
+				} else {
+					// election failed
+					// fmt.PrintLn(rf.me, "election failed, try another round later")
+					rf.resetElectionTimer(MIN_ELECTION_TIMEOUT, MAX_ELECTION_TIMEOUT)
+					continue
 				}
 
 			}
-
-			if rf.state == Candidate {
-				// election failed
-				fmt.Println(rf.me, "election failed, try another round later")
-				rf.resetElectionTimer()
-				continue
-			}
 		}
 	}
+}
+
+func (rf *Raft) heartBeat() {
+	for i := range rf.peers {
+		if i == rf.me {
+			continue
+		}
+		go func(dst int) {
+			// fmt.PrintLn(rf.me, "send heart beat to", dst)
+			args := AppendEntriesArgs{
+				Term:         rf.CurrentTerm,
+				LeaderId:     rf.me,
+				PrevLogIndex: len(rf.Logs),
+				PrevLogTerm:  0,
+				Entries:      nil,
+				LeaderCommit: rf.CommitIndex,
+			}
+			reply := AppendEntriesReply{}
+			ok := rf.peers[dst].Call("Raft.AppendEntries", args, &reply)
+			if ok {
+				// fmt.PrintLn(rf.me, "receive heartbeat from", dst)
+			} else {
+				// fmt.PrintLn(rf.me, "failed to send heartbeat to", dst)
+			}
+		}(i)
+	}
+	rf.resetElectionTimer(MIN_ELECTION_TIMEOUT/2, MIN_ELECTION_TIMEOUT)
 }
